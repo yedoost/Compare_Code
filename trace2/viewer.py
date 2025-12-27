@@ -1,223 +1,261 @@
 from __future__ import annotations
 
+import argparse
 import json
-from dataclasses import dataclass
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-from typing import Any, Dict, List, Optional
-
-from nicegui import ui
+from urllib.parse import unquote
 
 
-@dataclass(frozen=True)
-class ProjectRun:
-    project_id: str
-    title: str
-    snapshot_ref: str
-    run_id: str
-    generated_at: str
+INDEX_HTML = """
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<title>Trace2 Viewer</title>
+<style>
+body { font-family: Arial, sans-serif; margin: 1.5rem; }
+select, button { margin: 0.5rem 0.5rem 0.5rem 0; }
+.table { border-collapse: collapse; width: 100%; margin-top: 1rem; }
+.table th, .table td { border: 1px solid #ddd; padding: 0.5rem; }
+.table th { background: #f3f3f3; }
+.badge { padding: 0.2rem 0.5rem; border-radius: 0.3rem; color: #fff; }
+.OK_BASELINE, .OK_EXPECTED { background: #2e7d32; }
+.WARN { background: #ed6c02; }
+.DRIFT_UNEXPECTED { background: #c62828; }
+.UNMAPPED { background: #546e7a; }
+.MISSING { background: #6d4c41; }
+</style>
+</head>
+<body>
+<h1>Trace2 Viewer</h1>
+<section>
+  <h2>Run Selection</h2>
+  <label>Run A</label>
+  <select id="runA"></select>
+  <label>Run B</label>
+  <select id="runB"></select>
+  <button id="compareBtn">Compare</button>
+</section>
+<section>
+  <h2>Report</h2>
+  <div id="report"></div>
+</section>
+<section>
+  <h2>Compare Summary</h2>
+  <div id="compare"></div>
+</section>
+<script>
+async function fetchRuns() {
+  const response = await fetch('/api/runs');
+  return response.json();
+}
+
+function renderReport(report, container) {
+  container.innerHTML = '';
+  report.projects.forEach(project => {
+    const header = document.createElement('h3');
+    header.textContent = `${project.title} (${project.snapshot_ref})`;
+    container.appendChild(header);
+    const table = document.createElement('table');
+    table.className = 'table';
+    table.innerHTML = `
+      <thead><tr><th>Module</th><th>Status</th><th>Score</th><th>Expectation</th></tr></thead>
+      <tbody></tbody>`;
+    const tbody = table.querySelector('tbody');
+    project.modules.forEach(module => {
+      const row = document.createElement('tr');
+      row.innerHTML = `
+        <td>${module.module_id}</td>
+        <td><span class="badge ${module.status}">${module.status}</span></td>
+        <td>${module.score ?? ''}</td>
+        <td>${module.expected_rule_id ?? ''}</td>`;
+      tbody.appendChild(row);
+    });
+    container.appendChild(table);
+  });
+}
+
+function renderCompare(a, b, container) {
+  container.innerHTML = '';
+  if (!a || !b) {
+    container.textContent = 'Select two runs to compare.';
+    return;
+  }
+  const summary = document.createElement('div');
+  const diffs = [];
+  a.projects.forEach(projectA => {
+    const projectB = b.projects.find(p => p.id === projectA.id);
+    if (!projectB) return;
+    projectA.modules.forEach(moduleA => {
+      const moduleB = projectB.modules.find(m => m.module_id === moduleA.module_id);
+      if (!moduleB) return;
+      if (moduleA.status !== moduleB.status || moduleA.score !== moduleB.score) {
+        diffs.push({ project: projectA.id, module: moduleA.module_id, a: moduleA, b: moduleB });
+      }
+    });
+  });
+  summary.textContent = `Differences found: ${diffs.length}`;
+  container.appendChild(summary);
+  if (diffs.length === 0) return;
+  const table = document.createElement('table');
+  table.className = 'table';
+  table.innerHTML = `
+    <thead><tr><th>Project</th><th>Module</th><th>Status A</th><th>Status B</th><th>Score A</th><th>Score B</th></tr></thead>
+    <tbody></tbody>`;
+  const tbody = table.querySelector('tbody');
+  diffs.forEach(diff => {
+    const row = document.createElement('tr');
+    row.innerHTML = `
+      <td>${diff.project}</td>
+      <td>${diff.module}</td>
+      <td>${diff.a.status}</td>
+      <td>${diff.b.status}</td>
+      <td>${diff.a.score ?? ''}</td>
+      <td>${diff.b.score ?? ''}</td>`;
+    tbody.appendChild(row);
+  });
+  container.appendChild(table);
+}
+
+async function init() {
+  const runs = await fetchRuns();
+  const runASelect = document.getElementById('runA');
+  const runBSelect = document.getElementById('runB');
+  runs.forEach(run => {
+    const optionA = document.createElement('option');
+    optionA.value = run.run_id;
+    optionA.textContent = `${run.run_id} (${run.generated_at})`;
+    runASelect.appendChild(optionA);
+    const optionB = optionA.cloneNode(true);
+    runBSelect.appendChild(optionB);
+  });
+  async function loadReport(runId, target) {
+    if (!runId) return null;
+    const response = await fetch(`/api/run/${runId}/report`);
+    const report = await response.json();
+    if (target) renderReport(report, target);
+    return report;
+  }
+  const reportContainer = document.getElementById('report');
+  const compareContainer = document.getElementById('compare');
+  runASelect.addEventListener('change', async () => {
+    const reportA = await loadReport(runASelect.value, reportContainer);
+    const reportB = await loadReport(runBSelect.value);
+    renderCompare(reportA, reportB, compareContainer);
+  });
+  runBSelect.addEventListener('change', async () => {
+    const reportA = await loadReport(runASelect.value);
+    const reportB = await loadReport(runBSelect.value);
+    renderCompare(reportA, reportB, compareContainer);
+  });
+  document.getElementById('compareBtn').addEventListener('click', async () => {
+    const reportA = await loadReport(runASelect.value, reportContainer);
+    const reportB = await loadReport(runBSelect.value);
+    renderCompare(reportA, reportB, compareContainer);
+  });
+  if (runs.length > 0) {
+    runASelect.value = runs[0].run_id;
+    const reportA = await loadReport(runASelect.value, reportContainer);
+    renderCompare(reportA, null, compareContainer);
+  }
+}
+
+init();
+</script>
+</body>
+</html>
+"""
 
 
-class RunIndex:
+class ViewerHandler(BaseHTTPRequestHandler):
+    def do_GET(self) -> None:
+        path = unquote(self.path.split("?", 1)[0])
+        if path == "/":
+            self._send_html(INDEX_HTML)
+            return
+        if path == "/api/runs":
+            self._send_json(self.server.viewer.list_runs())
+            return
+        if path.startswith("/api/run/"):
+            parts = path.split("/")
+            if len(parts) >= 5:
+                run_id = parts[3]
+                item = parts[4]
+                data = self.server.viewer.read_run_file(run_id, item)
+                if data is None:
+                    self.send_error(404, "Run not found")
+                    return
+                self._send_json(data)
+                return
+        self.send_error(404, "Not found")
+
+    def log_message(self, format: str, *args) -> None:  # noqa: A003
+        return
+
+    def _send_html(self, content: str) -> None:
+        data = content.encode("utf-8")
+        self.send_response(200)
+        self.send_header("Content-Type", "text/html; charset=utf-8")
+        self.send_header("Content-Length", str(len(data)))
+        self.end_headers()
+        self.wfile.write(data)
+
+    def _send_json(self, payload: object) -> None:
+        data = json.dumps(payload, ensure_ascii=False).encode("utf-8")
+        self.send_response(200)
+        self.send_header("Content-Type", "application/json; charset=utf-8")
+        self.send_header("Content-Length", str(len(data)))
+        self.end_headers()
+        self.wfile.write(data)
+
+
+class ViewerApp:
     def __init__(self, reports_dir: Path) -> None:
         self.reports_dir = reports_dir
-        self.project_runs: List[ProjectRun] = []
-        self._index_runs()
 
-    def _index_runs(self) -> None:
+    def list_runs(self) -> list[dict[str, object]]:
+        runs = []
         if not self.reports_dir.exists():
-            return
+            return runs
         for run_dir in sorted(self.reports_dir.iterdir()):
             manifest = run_dir / "run_manifest.json"
-            if not manifest.exists():
-                continue
-            data = json.loads(manifest.read_text(encoding="utf-8"))
-            generated_at = data.get("generated_at", "")
-            run_id = data.get("run_id", run_dir.name)
-            for project in data.get("projects", []):
-                self.project_runs.append(
-                    ProjectRun(
-                        project_id=project.get("id", ""),
-                        title=project.get("title", ""),
-                        snapshot_ref=project.get("snapshot_ref", ""),
-                        run_id=run_id,
-                        generated_at=generated_at,
-                    )
-                )
+            if manifest.exists():
+                data = json.loads(manifest.read_text(encoding="utf-8"))
+                runs.append(data)
+        return runs
 
-    def unique_projects(self) -> List[ProjectRun]:
-        latest: Dict[str, ProjectRun] = {}
-        for project in self.project_runs:
-            key = f"{project.project_id}::{project.snapshot_ref}"
-            existing = latest.get(key)
-            if existing is None or project.generated_at > existing.generated_at:
-                latest[key] = project
-        return sorted(latest.values(), key=lambda item: (item.project_id, item.snapshot_ref))
-
-    def read_report(self, run_id: str) -> Optional[Dict[str, Any]]:
-        path = self.reports_dir / run_id / "report.json"
+    def read_run_file(self, run_id: str, item: str) -> object | None:
+        file_map = {
+            "report": "report.json",
+            "evidence": "evidence.json",
+            "actions": "actions.json",
+        }
+        filename = file_map.get(item)
+        if not filename:
+            return None
+        path = self.reports_dir / run_id / filename
         if not path.exists():
             return None
         return json.loads(path.read_text(encoding="utf-8"))
 
 
-class ViewerState:
-    def __init__(self, index: RunIndex) -> None:
-        self.index = index
-        self.run_map = {self._label(run): run for run in index.unique_projects()}
-        self.selected_a: Optional[ProjectRun] = None
-        self.selected_b: Optional[ProjectRun] = None
-
-    @staticmethod
-    def _label(run: ProjectRun) -> str:
-        return f"{run.title} ({run.snapshot_ref})"
-
-    def labels(self) -> List[str]:
-        return list(self.run_map.keys())
-
-    def select_a(self, label: Optional[str]) -> None:
-        self.selected_a = self.run_map.get(label) if label else None
-
-    def select_b(self, label: Optional[str]) -> None:
-        self.selected_b = self.run_map.get(label) if label else None
-
-
-def build_report_rows(report: Dict[str, Any]) -> List[Dict[str, Any]]:
-    rows: List[Dict[str, Any]] = []
-    for project in report.get("projects", []):
-        for module in project.get("modules", []):
-            rows.append(
-                {
-                    "project": project.get("id"),
-                    "snapshot": project.get("snapshot_ref"),
-                    "module": module.get("module_id"),
-                    "status": module.get("status"),
-                    "score": module.get("score"),
-                    "expectation": module.get("expected_rule_id"),
-                }
-            )
-    return rows
-
-
-def build_compare_rows(report_a: Dict[str, Any], report_b: Dict[str, Any]) -> List[Dict[str, Any]]:
-    rows: List[Dict[str, Any]] = []
-    index_b: Dict[str, Dict[str, Any]] = {}
-    for project in report_b.get("projects", []):
-        for module in project.get("modules", []):
-            key = f"{project.get('id')}::{module.get('module_id')}"
-            index_b[key] = module
-    for project in report_a.get("projects", []):
-        for module in project.get("modules", []):
-            key = f"{project.get('id')}::{module.get('module_id')}"
-            other = index_b.get(key)
-            if not other:
-                continue
-            if module.get("status") == other.get("status") and module.get("score") == other.get("score"):
-                continue
-            rows.append(
-                {
-                    "project": project.get("id"),
-                    "module": module.get("module_id"),
-                    "status_a": module.get("status"),
-                    "status_b": other.get("status"),
-                    "score_a": module.get("score"),
-                    "score_b": other.get("score"),
-                }
-            )
-    return rows
-
-
-def main() -> None:
-    import argparse
-
+def main() -> int:
     parser = argparse.ArgumentParser(prog="trace2-viewer")
     parser.add_argument("--reports", required=True, help="Reports directory")
     parser.add_argument("--port", type=int, default=8000)
     args = parser.parse_args()
 
     reports_dir = Path(args.reports).expanduser().resolve()
-    index = RunIndex(reports_dir)
-    state = ViewerState(index)
-
-    ui.add_head_html(
-        """
-        <style>
-        body { background: #f7f8fa; }
-        .summary-card { background: white; border-radius: 12px; padding: 16px; box-shadow: 0 6px 16px rgba(0,0,0,0.08); }
-        </style>
-        """
-    )
-
-    with ui.row().classes("w-full items-center justify-between").style("padding: 16px 24px;"):
-        ui.label("Trace2 Viewer").classes("text-2xl font-bold")
-        ui.label("Compare snapshots by version/commit").classes("text-sm text-gray-500")
-
-    with ui.row().classes("w-full gap-6").style("padding: 0 24px 24px 24px;"):
-        with ui.column().classes("w-1/2"):
-            ui.label("Snapshot A").classes("text-sm font-medium text-gray-600")
-            select_a = ui.select(options=state.labels(), value=None).classes("w-full")
-        with ui.column().classes("w-1/2"):
-            ui.label("Snapshot B").classes("text-sm font-medium text-gray-600")
-            select_b = ui.select(options=state.labels(), value=None).classes("w-full")
-
-    with ui.row().classes("w-full gap-6").style("padding: 0 24px;"):
-        report_card = ui.card().classes("summary-card w-full")
-        compare_card = ui.card().classes("summary-card w-full")
-
-    report_table = ui.table(
-        columns=[
-            {"name": "project", "label": "Project", "field": "project"},
-            {"name": "snapshot", "label": "Snapshot", "field": "snapshot"},
-            {"name": "module", "label": "Module", "field": "module"},
-            {"name": "status", "label": "Status", "field": "status"},
-            {"name": "score", "label": "Score", "field": "score"},
-            {"name": "expectation", "label": "Expectation", "field": "expectation"},
-        ],
-        rows=[],
-        row_key="module",
-    ).classes("w-full")
-
-    compare_table = ui.table(
-        columns=[
-            {"name": "project", "label": "Project", "field": "project"},
-            {"name": "module", "label": "Module", "field": "module"},
-            {"name": "status_a", "label": "Status A", "field": "status_a"},
-            {"name": "status_b", "label": "Status B", "field": "status_b"},
-            {"name": "score_a", "label": "Score A", "field": "score_a"},
-            {"name": "score_b", "label": "Score B", "field": "score_b"},
-        ],
-        rows=[],
-        row_key="module",
-    ).classes("w-full")
-
-    with report_card:
-        ui.label("Report Overview").classes("text-lg font-semibold mb-2")
-        ui.label("Select snapshot A to view its report.").classes("text-sm text-gray-500")
-        report_card.add(report_table)
-
-    with compare_card:
-        ui.label("Comparison").classes("text-lg font-semibold mb-2")
-        ui.label("Select both snapshots to compare drift.").classes("text-sm text-gray-500")
-        compare_card.add(compare_table)
-
-    def refresh() -> None:
-        report_table.rows = []
-        compare_table.rows = []
-        if state.selected_a:
-            report_a = index.read_report(state.selected_a.run_id)
-            if report_a:
-                report_table.rows = build_report_rows(report_a)
-        if state.selected_a and state.selected_b:
-            report_a = index.read_report(state.selected_a.run_id) or {}
-            report_b = index.read_report(state.selected_b.run_id) or {}
-            compare_table.rows = build_compare_rows(report_a, report_b)
-        report_table.update()
-        compare_table.update()
-
-    select_a.on("update:model-value", lambda e: (state.select_a(e.value), refresh()))
-    select_b.on("update:model-value", lambda e: (state.select_b(e.value), refresh()))
-
-    ui.run(port=args.port)
+    server = ThreadingHTTPServer(("0.0.0.0", args.port), ViewerHandler)
+    server.viewer = ViewerApp(reports_dir)
+    print(f"Trace2 Viewer running at http://localhost:{args.port}")
+    try:
+        server.serve_forever()
+    except KeyboardInterrupt:
+        pass
+    return 0
 
 
 if __name__ == "__main__":
-    main()
+    raise SystemExit(main())
