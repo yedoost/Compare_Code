@@ -1,0 +1,7 @@
+version: 1
+requirements:
+  - id: REQ_UPGRADE_131
+    title: "Upgrade behavior to zlib v1.3.1"
+    description: "If active, expect modules to resemble v1.3.1 baseline"
+    impacts:
+      modules: [ZLIB_CORE, MINIZIP]

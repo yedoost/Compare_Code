@@ -1,0 +1,12 @@
+version: 1
+projects:
+  - id: ZLIB_1212
+    requires: []
+
+  - id: ZLIB_1213
+    requires: []
+
+  - id: ZLIB_131
+    requires:
+      - id: REQ_UPGRADE_131
+        must_have: true

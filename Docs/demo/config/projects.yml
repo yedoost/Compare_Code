@@ -1,0 +1,22 @@
+version: 1
+projects:
+  - id: ZLIB_1212
+    title: zlib @ v1.2.12
+    source:
+      type: git
+      repo: "https://github.com/madler/zlib.git"
+      snapshot: { type: tag, ref: "v1.2.12" }
+
+  - id: ZLIB_1213
+    title: zlib @ v1.2.13
+    source:
+      type: git
+      repo: "https://github.com/madler/zlib.git"
+      snapshot: { type: tag, ref: "v1.2.13" }
+
+  - id: ZLIB_131
+    title: zlib @ v1.3.1
+    source:
+      type: git
+      repo: "https://github.com/madler/zlib.git"
+      snapshot: { type: tag, ref: "v1.3.1" }

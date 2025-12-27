@@ -1,0 +1,37 @@
+version: 1
+modules:
+  - id: ZLIB_CORE
+    title: "Core zlib library (root sources)"
+    language: C
+    include:
+      - "*.c"
+      - "*.h"
+    exclude:
+      - "examples/**"
+      - "test/**"
+      - "contrib/**"
+      - "doc/**"
+      - "old/**"
+      - "win32/**"
+      - "watcom/**"
+      - "amiga/**"
+      - "msdos/**"
+      - "os400/**"
+      - "qnx/**"
+      - "nintendods/**"
+    critical_files:
+      - "deflate.c"
+      - "inflate.c"
+      - "zlib.h"
+      - "zutil.c"
+
+  - id: MINIZIP
+    title: "contrib/minizip (optional tools)"
+    language: C
+    include:
+      - "contrib/minizip/**.c"
+      - "contrib/minizip/**.h"
+    exclude: []
+    critical_files:
+      - "contrib/minizip/unzip.c"
+      - "contrib/minizip/zip.c"

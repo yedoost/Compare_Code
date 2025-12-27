@@ -1,0 +1,15 @@
+version: 1
+baselines:
+  - id: BL_ZLIB_1213
+    title: "zlib baseline v1.2.13"
+    source:
+      type: git
+      repo: "https://github.com/madler/zlib.git"
+      snapshot: { type: tag, ref: "v1.2.13" }
+
+  - id: BL_ZLIB_131
+    title: "zlib baseline v1.3.1"
+    source:
+      type: git
+      repo: "https://github.com/madler/zlib.git"
+      snapshot: { type: tag, ref: "v1.3.1" }

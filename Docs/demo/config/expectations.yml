@@ -1,0 +1,30 @@
+version: 1
+
+defaults:
+  signature: simhash64
+  thresholds:
+    HIGH: { ok: 0.92, warn: 0.86 }
+    MEDIUM: { ok: 0.85, warn: 0.75 }
+
+rules:
+  - id: DEFAULT_TO_1213
+    priority: 10
+    when: { projects: ["*"] }
+    expect:
+      - module: ZLIB_CORE
+        expected_level: HIGH
+        target: { type: baseline, baseline_id: BL_ZLIB_1213 }
+      - module: MINIZIP
+        expected_level: MEDIUM
+        target: { type: baseline, baseline_id: BL_ZLIB_1213 }
+
+  - id: UPGRADE_TO_131
+    priority: 100
+    when: { requires_all: [REQ_UPGRADE_131] }
+    expect:
+      - module: ZLIB_CORE
+        expected_level: HIGH
+        target: { type: baseline, baseline_id: BL_ZLIB_131 }
+      - module: MINIZIP
+        expected_level: HIGH
+        target: { type: baseline, baseline_id: BL_ZLIB_131 }
